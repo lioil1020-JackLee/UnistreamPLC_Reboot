@@ -1,0 +1,16 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv/
+
+# Local user bin (uv installs here by default on Windows when using --user)
+.local/bin/
+
+# Environment files
+.env

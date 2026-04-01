@@ -1,0 +1,96 @@
+name: Build and Release Unistream PLC Reboot
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PROJECT_NAME: UnistreamPLC_Reboot
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  build:
+    name: Build ${{ matrix.build_type }} on Windows
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [onedir, onefile]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          uv venv --python ${{ env.PYTHON_VERSION }}
+          uv pip install --python .\.venv\Scripts\python.exe pyinstaller -e .
+
+      - name: Build with PyInstaller
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -m PyInstaller "${{ env.PROJECT_NAME }}_${{ matrix.build_type }}.spec"
+
+      - name: Prepare artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+
+          if ("${{ matrix.build_type }}" -eq "onedir") {
+            Compress-Archive `
+              -Path "dist\\${{ env.PROJECT_NAME }}" `
+              -DestinationPath "artifacts\\${{ env.PROJECT_NAME }}-windows-onedir.zip" `
+              -Force
+          }
+          else {
+            Copy-Item `
+              -LiteralPath "dist\\${{ env.PROJECT_NAME }}_onefile.exe" `
+              -Destination "artifacts\\${{ env.PROJECT_NAME }}-windows-onefile.exe"
+          }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PROJECT_NAME }}-${{ matrix.build_type }}-windows
+          path: artifacts/*
+          if-no-files-found: error
+
+  release:
+    name: Create Release
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: raw_artifacts
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          mkdir -p final_assets
+          find raw_artifacts -type f \( -name "*.zip" -o -name "*.exe" \) -exec cp {} final_assets/ \;
+          ls -lh final_assets
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: final_assets/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

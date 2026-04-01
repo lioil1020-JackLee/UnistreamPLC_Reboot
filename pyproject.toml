@@ -1,0 +1,31 @@
+[project]
+name = "unistreamplc-reboot"
+version = "0.1.0"
+description = "Clean-room HTTPS and WebSocket reboot helper for Unitronics UniStream PLC"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "cryptography>=46.0.0",
+    "websockets>=13.0",
+]
+authors = [{ name = "Your Name", email = "you@example.com" }]
+license = { text = "MIT" }
+keywords = ["unistream", "plc", "reboot"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+]
+
+[tool.uv]
+
+[tool.uv.tasks.start]
+cmd = "python main.py"
+description = "Run the project's main script"
+
+[tool.uv.tasks.install]
+cmd = "python -m pip install -e ."
+description = "Install project dependencies into the active environment"
+
+[tool.uv.tasks.venv]
+cmd = "python -m venv .venv"
+description = "Create a local virtual environment named .venv"
