@@ -38,12 +38,12 @@ jobs:
         shell: pwsh
         run: |
           uv venv --python ${{ env.PYTHON_VERSION }}
-          uv pip install --python .\.venv\Scripts\python.exe pyinstaller -e .
+          uv pip install --python .\.venv\Scripts\python.exe pyinstaller .
 
       - name: Build with PyInstaller
         shell: pwsh
         run: |
-          .\.venv\Scripts\python.exe -m PyInstaller "${{ env.PROJECT_NAME }}_${{ matrix.build_type }}.spec"
+          .\.venv\Scripts\python.exe -m PyInstaller --clean --noconfirm "${{ env.PROJECT_NAME }}_${{ matrix.build_type }}.spec"
 
       - name: Prepare artifact
         shell: pwsh

@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "unistreamplc-reboot"
 version = "0.1.0"
@@ -9,23 +13,11 @@ dependencies = [
     "websockets>=13.0",
 ]
 authors = [{ name = "Your Name", email = "you@example.com" }]
-license = { text = "MIT" }
+license = "MIT"
 keywords = ["unistream", "plc", "reboot"]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
 ]
 
-[tool.uv]
-
-[tool.uv.tasks.start]
-cmd = "python main.py"
-description = "Run the project's main script"
-
-[tool.uv.tasks.install]
-cmd = "python -m pip install -e ."
-description = "Install project dependencies into the active environment"
-
-[tool.uv.tasks.venv]
-cmd = "python -m venv .venv"
-description = "Create a local virtual environment named .venv"
+[tool.setuptools]
+py-modules = ["main", "unistream_client"]
