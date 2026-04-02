@@ -17,46 +17,21 @@ PLC 的通訊位置是：
 /v1/put/workingMode {"mode":"Reboot"} 
 ```
 
-對應 payload bytes：
-
-```text
-2f 76 31 2f 70 75 74 2f 77 6f 72 6b 69 6e 67 4d 6f 64 65 20 7b 22 6d 6f 64 65 22 3a 22 52 65 62 6f 6f 74 22 7d 20
-```
-
-## Clean-Room 協定流程
-
 目前的 Python client 會自己完成整個流程：
 
-1. 在本機暫時產生一組 RSA keypair。
-2. 用 Unitronics 固定的 login 公鑰加密 PLC communication password。
-3. 呼叫 `POST /v1/login`，內容如下：
-
-```json
-{
   "username": "UniLogicUser",
-  "password": "<base64 RSA 加密後的 PLC 密碼>",
+ OPC UA Port（預設 48484）
   "key": "<client public key PEM>"
 }
 ```
-
-4. 成功登入時，PLC 會回傳類似：
-
 ```json
 {
   "key": "<base64 RSA 加密後的 WebSocket auth token>",
-  "result": "<base64 狀態資料>"
-}
 ```
 
 5. 用剛剛產生的 private key 解出 WebSocket auth token。
 6. 連線到 `wss://<PLC-IP>:<port>/`。
 7. 先送出 auth token。
-8. 驗證時送 `/v1/swVer`。
-9. reboot 時送 `/v1/put/workingMode {"mode":"Reboot"} `。
-
-觀察到的應用層順序如下：
-
-1. `GET /v3/hwVer`
 2. `POST /v1/login`
 3. WebSocket auth token
 4. WebSocket `/v1/swVer`
@@ -85,6 +60,24 @@ python -m pip install -e .
 python .\main.py
 ```
 
+啟動後自動最小化到系統列：
+
+```powershell
+python .\main.py -tray
+```
+
+啟動後自動進入 RUN 監控：
+
+```powershell
+python .\main.py -run
+```
+
+同時自動最小化到系統列並自動 RUN：
+
+```powershell
+python .\main.py -run -tray
+```
+
 檢查 PLC 基本通訊：
 
 ```powershell
@@ -106,7 +99,13 @@ python .\main.py reboot --ip 10.80.1.10 --port 8001 --password YOUR_PASSWORD
 檢查 OPC UA 通訊：
 
 ```powershell
-python .\main.py check-opcua --ip 10.80.1.10 --opc-port 48480
+python .\main.py check-opcua --ip 10.80.1.10 --opc-port 48484
+```
+
+若使用打包後的 EXE，也可用相同參數：
+
+```powershell
+.\dist\UnistreamPLC_Reboot_onefile.exe -run -tray
 ```
 
 如果 PLC 沒有設定 communication password，`--password` 可以留空，或在 UI 中把密碼欄位留白。
@@ -116,7 +115,7 @@ python .\main.py check-opcua --ip 10.80.1.10 --opc-port 48480
 目前 UI 提供：
 
 - PLC IP
-- OPC UA Port（預設 48480）
+- OPC UA Port（預設 48484）
 - PLC Password
 - `Check PLC`
 - `Validate`

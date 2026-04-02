@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Any
 from tkinter import END, LEFT, W, StringVar, Tk
 from tkinter import messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
@@ -20,7 +21,7 @@ from unistream_client import PLCError, check_opcua, check_plc, reboot_plc, valid
 
 DEFAULT_PLC_IP = "10.80.1.10"
 DEFAULT_PLC_PORT = 8001
-DEFAULT_OPCUA_PORT = 48480
+DEFAULT_OPCUA_PORT = 48484
 DEFAULT_PLC_PASSWORD = "Blue0324!"
 RUN_CHECK_INTERVAL_SECONDS = 10
 RUN_COOLDOWN_SECONDS = 5 * 60
@@ -29,7 +30,7 @@ ICON_PATH = Path(__file__).with_name("lioil.ico")
 
 
 class RebootApp:
-    def __init__(self) -> None:
+    def __init__(self, *, auto_run: bool = False, start_in_tray: bool = False) -> None:
         set_windows_app_id(APP_ID)
         self.root = Tk()
         self.root.title("Unistream PLC Reboot")
@@ -53,9 +54,11 @@ class RebootApp:
         self.cooldown_until = 0.0
         self._closing = False
 
-        self.tray_icon: pystray.Icon | None = None
+        self.tray_icon: Any = None
         self.tray_image: Image.Image | None = None
         self.is_tray_visible = False
+        self.auto_run_on_start = auto_run
+        self.start_in_tray = start_in_tray
 
         self._build_ui()
         self.root.after(50, self._on_window_ready)
@@ -127,11 +130,17 @@ class RebootApp:
 
     def _on_window_ready(self) -> None:
         try:
-            self.root.deiconify()
-            self.root.lift()
-            self.root.focus_force()
+            if self.start_in_tray:
+                self.minimize_to_tray()
+            else:
+                self.root.deiconify()
+                self.root.lift()
+                self.root.focus_force()
         except Exception:
             pass
+
+        if self.auto_run_on_start:
+            self.root.after(100, self.start_run_monitor)
 
     def on_close(self) -> None:
         self._closing = True
@@ -174,9 +183,10 @@ class RebootApp:
             pystray.MenuItem("Stop RUN", self._tray_stop_run),
             pystray.MenuItem("Exit", self._tray_exit),
         )
-        self.tray_icon = pystray.Icon("UnistreamPLCReboot", self.tray_image, "Unistream PLC Reboot", menu)
+        icon = pystray.Icon("UnistreamPLCReboot", self.tray_image, "Unistream PLC Reboot", menu)
+        self.tray_icon = icon
 
-        thread = threading.Thread(target=self.tray_icon.run, daemon=True)
+        thread = threading.Thread(target=icon.run, daemon=True)
         thread.start()
         self.is_tray_visible = True
 
@@ -507,6 +517,18 @@ def run_cli(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Unistream PLC reboot helper")
+    parser.add_argument(
+        "-run",
+        "--run",
+        action="store_true",
+        help="Start GUI and automatically enable RUN monitoring.",
+    )
+    parser.add_argument(
+        "-tray",
+        "--tray",
+        action="store_true",
+        help="Start GUI minimized to system tray.",
+    )
     sub = parser.add_subparsers(dest="command")
 
     for name in ("check", "validate", "reboot"):
@@ -554,7 +576,7 @@ def main() -> int:
     if args.command:
         return run_cli(args)
 
-    app = RebootApp()
+    app = RebootApp(auto_run=args.run, start_in_tray=args.tray)
     app.run()
     return 0
 
