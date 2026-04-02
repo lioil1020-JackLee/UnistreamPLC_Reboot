@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import json
 import ssl
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+
+from asyncua import Client as AsyncUaClient
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -317,3 +320,26 @@ def reboot_plc(ip: str, port: int, password: str | None) -> OperationResult:
 
 def check_plc(ip: str, port: int, password: str | None = None) -> OperationResult:
     return run_operation("check", ip=ip, port=port, password=password)
+
+
+def check_opcua(ip: str, opc_port: int) -> OperationResult:
+    logger = OperationLogger()
+    endpoint = f"opc.tcp://{ip}:{opc_port}"
+
+    logger.add(f"Attempting OPC UA communication check at {endpoint}")
+
+    async def _check() -> None:
+        client = AsyncUaClient(url=endpoint)
+        client.set_security_string("None")
+        client.application_uri = "urn:lioil:unistream:opcua-check"
+        # asyncua defaults to anonymous if username/password are not provided.
+        await client.connect()
+        await client.disconnect()
+
+    try:
+        asyncio.run(_check())
+        logger.add("OPC UA communication OK")
+        return OperationResult(returncode=0, stdout=logger.dump())
+    except Exception as exc:
+        logger.add(f"OPC UA communication failed: {exc}")
+        return OperationResult(returncode=4, stdout=logger.dump())

@@ -9,6 +9,9 @@ project_dir = Path(SPEC).resolve().parent
 icon_path = str(project_dir / "lioil.ico")
 datas = [(str(project_dir / "lioil.ico"), ".")]
 hiddenimports = collect_submodules("websockets")
+hiddenimports += collect_submodules("asyncua")
+hiddenimports += collect_submodules("pystray")
+hiddenimports += collect_submodules("PIL")
 
 
 a = Analysis(

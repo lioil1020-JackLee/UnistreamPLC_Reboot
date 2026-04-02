@@ -9,7 +9,10 @@ description = "Clean-room HTTPS and WebSocket reboot helper for Unitronics UniSt
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "asyncua>=1.1.5",
     "cryptography>=46.0.0",
+    "pillow>=11.0.0",
+    "pystray>=0.19.5",
     "websockets>=13.0",
 ]
 authors = [{ name = "Your Name", email = "you@example.com" }]
