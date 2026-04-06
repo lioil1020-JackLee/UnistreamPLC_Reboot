@@ -33,7 +33,7 @@
 
 目前 `config.json` 只保留需要經常調整的 PLC 與啟動參數。
 像是視窗標題、Windows App ID、icon 檔名這些固定值，已改回程式內硬編碼。
-`config.json` 是必要檔案；程式啟動時會先讀它，再決定要開 GUI 還是直接執行命令。
+如果程式執行目錄沒有 `config.json`，程式會自動產生一份預設設定檔後再載入。
 
 ```json
 {
@@ -70,7 +70,7 @@
 - 是否自動開始 RUN 監控，交給 `startup.auto_run_monitor`
 - 是否一開啟就縮到系統匣，交給 `startup.start_in_tray`
 
-執行程式時，如果程式所在目錄有 `config.json`，而且你沒有額外帶 CLI 參數，程式就會直接依照 `config.json` 啟動。
+執行程式時，如果你沒有額外帶 CLI 參數，程式就會依照同目錄的 `config.json` 啟動。
 
 例如：
 

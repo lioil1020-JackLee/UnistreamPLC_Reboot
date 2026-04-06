@@ -9,7 +9,6 @@ project_dir = Path(SPEC).resolve().parent
 icon_path = str(project_dir / "lioil.ico")
 datas = [
     (str(project_dir / "lioil.ico"), "."),
-    (str(project_dir / "config.json"), "."),
 ]
 hiddenimports = collect_submodules("websockets")
 hiddenimports += collect_submodules("asyncua")

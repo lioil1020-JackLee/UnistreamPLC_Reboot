@@ -24,6 +24,23 @@ VALID_STARTUP_COMMANDS = {"gui", "check", "validate", "reboot", "check-opcua"}
 APP_TITLE = "Unistream PLC Reboot"
 APP_ID = "lioil.UnistreamPLCReboot"
 ICON_FILE_NAME = "lioil.ico"
+DEFAULT_CONFIG = {
+    "plc": {
+        "ip": "10.80.1.10",
+        "api_port": 8001,
+        "opc_ua_port": 48484,
+        "password": "Blue0324!",
+    },
+    "run_monitor": {
+        "check_interval_seconds": 10,
+        "cooldown_seconds": 300,
+    },
+    "startup": {
+        "command": "gui",
+        "auto_run_monitor": False,
+        "start_in_tray": False,
+    },
+}
 
 
 def get_app_base_dir() -> Path:
@@ -43,14 +60,17 @@ def read_json_object(path: Path) -> dict[str, Any]:
     return raw
 
 
+def write_default_config(path: Path) -> None:
+    path.write_text(
+        json.dumps(DEFAULT_CONFIG, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
 def load_config(base_dir: Path) -> tuple[dict[str, Any], Path]:
     config_path = base_dir / CONFIG_FILE_NAME
     if not config_path.exists():
-        resource_path = get_resource_path(CONFIG_FILE_NAME)
-        if resource_path.exists():
-            config_path = resource_path
-        else:
-            raise PLCError(f"Missing {CONFIG_FILE_NAME} in {base_dir}.")
+        write_default_config(config_path)
 
     config = read_json_object(config_path)
     validate_config(config)
