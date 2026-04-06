@@ -1,0 +1,17 @@
+{
+  "plc": {
+    "ip": "10.80.1.10",
+    "api_port": 8001,
+    "opc_ua_port": 48484,
+    "password": "Blue0324!"
+  },
+  "run_monitor": {
+    "check_interval_seconds": 10,
+    "cooldown_seconds": 300
+  },
+  "startup": {
+    "command": "gui",
+    "auto_run_monitor": true,
+    "start_in_tray": true
+  }
+}

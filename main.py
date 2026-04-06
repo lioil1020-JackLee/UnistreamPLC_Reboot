@@ -7,11 +7,11 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
-from tkinter import END, LEFT, W, StringVar, Tk
+from tkinter import END, LEFT, W, Listbox, StringVar, Tk
 from tkinter import messagebox, ttk
-from tkinter.scrolledtext import ScrolledText
 
 import pystray
 from PIL import Image
@@ -19,31 +19,115 @@ from PIL import Image
 from unistream_client import PLCError, check_opcua, check_plc, reboot_plc, validate_plc
 
 
-DEFAULT_PLC_IP = "10.80.1.10"
-DEFAULT_PLC_PORT = 8001
-DEFAULT_OPCUA_PORT = 48484
-DEFAULT_PLC_PASSWORD = "Blue0324!"
-RUN_CHECK_INTERVAL_SECONDS = 10
-RUN_COOLDOWN_SECONDS = 5 * 60
+CONFIG_FILE_NAME = "config.json"
+VALID_STARTUP_COMMANDS = {"gui", "check", "validate", "reboot", "check-opcua"}
+APP_TITLE = "Unistream PLC Reboot"
 APP_ID = "lioil.UnistreamPLCReboot"
-ICON_PATH = Path(__file__).with_name("lioil.ico")
+ICON_FILE_NAME = "lioil.ico"
+
+
+def get_app_base_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def read_json_object(path: Path) -> dict[str, Any]:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise PLCError(f"Invalid {path.name}: {exc}") from exc
+
+    if not isinstance(raw, dict):
+        raise PLCError(f"{path.name} must contain a JSON object.")
+    return raw
+
+
+def load_config(base_dir: Path) -> tuple[dict[str, Any], Path]:
+    config_path = base_dir / CONFIG_FILE_NAME
+    if not config_path.exists():
+        resource_path = get_resource_path(CONFIG_FILE_NAME)
+        if resource_path.exists():
+            config_path = resource_path
+        else:
+            raise PLCError(f"Missing {CONFIG_FILE_NAME} in {base_dir}.")
+
+    config = read_json_object(config_path)
+    validate_config(config)
+    return config, config_path
+
+
+def validate_config(config: dict[str, Any]) -> None:
+    try:
+        plc = config["plc"]
+        startup = config["startup"]
+        run_monitor = config["run_monitor"]
+    except KeyError as exc:
+        raise PLCError(f"config.json is missing required section: {exc.args[0]}") from exc
+
+    for section_name, section in (("plc", plc), ("startup", startup), ("run_monitor", run_monitor)):
+        if not isinstance(section, dict):
+            raise PLCError(f"config.json section '{section_name}' must be an object.")
+
+    for key in ("ip", "api_port", "opc_ua_port", "password"):
+        if key not in plc:
+            raise PLCError(f"config.json plc.{key} is required.")
+    for key in ("command", "auto_run_monitor", "start_in_tray"):
+        if key not in startup:
+            raise PLCError(f"config.json startup.{key} is required.")
+    for key in ("check_interval_seconds", "cooldown_seconds"):
+        if key not in run_monitor:
+            raise PLCError(f"config.json run_monitor.{key} is required.")
+
+    api_port = int(plc["api_port"])
+    opc_port = int(plc["opc_ua_port"])
+    check_interval_seconds = int(run_monitor["check_interval_seconds"])
+    cooldown_seconds = int(run_monitor["cooldown_seconds"])
+    command = str(startup["command"])
+
+    if not 1 <= api_port <= 65535:
+        raise PLCError("config.json plc.api_port must be between 1 and 65535.")
+    if not 1 <= opc_port <= 65535:
+        raise PLCError("config.json plc.opc_ua_port must be between 1 and 65535.")
+    if check_interval_seconds < 1:
+        raise PLCError("config.json run_monitor.check_interval_seconds must be >= 1.")
+    if cooldown_seconds < 0:
+        raise PLCError("config.json run_monitor.cooldown_seconds must be >= 0.")
+    if command not in VALID_STARTUP_COMMANDS:
+        valid = ", ".join(sorted(VALID_STARTUP_COMMANDS))
+        raise PLCError(f"config.json startup.command must be one of: {valid}.")
+
+
+def get_resource_path(name: str) -> Path:
+    base_dir = Path(getattr(sys, "_MEIPASS", get_app_base_dir()))
+    return base_dir / name
 
 
 class RebootApp:
-    def __init__(self, *, auto_run: bool = False, start_in_tray: bool = False) -> None:
-        set_windows_app_id(APP_ID)
+    def __init__(self, config: dict[str, Any], *, auto_run: bool = False, start_in_tray: bool = False) -> None:
+        self.config = config
+        self.app_title = APP_TITLE
+        self.app_id = APP_ID
+        self.plc_port = int(config["plc"]["api_port"])
+        self.opc_ua_port = int(config["plc"]["opc_ua_port"])
+        self.default_password = str(config["plc"]["password"])
+        self.run_check_interval_seconds = int(config["run_monitor"]["check_interval_seconds"])
+        self.run_cooldown_seconds = int(config["run_monitor"]["cooldown_seconds"])
+        self.icon_path = get_resource_path(ICON_FILE_NAME)
+
+        set_windows_app_id(self.app_id)
         self.root = Tk()
-        self.root.title("Unistream PLC Reboot")
-        self.root.geometry("980x620")
-        self.root.minsize(920, 560)
+        self.root.title(self.app_title)
+        self.root.geometry("680x300")
+        self.root.minsize(660, 260)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
-        apply_window_icon(self.root, ICON_PATH)
+        apply_window_icon(self.root, self.icon_path)
         self.root.bind("<Unmap>", self._on_window_state_change)
 
-        self.ip_var = StringVar(value=DEFAULT_PLC_IP)
-        self.opc_port_var = StringVar(value=str(DEFAULT_OPCUA_PORT))
-        self.password_var = StringVar(value=DEFAULT_PLC_PASSWORD)
-        self.status_var = StringVar(value="Ready. Enter the PLC password, or leave it blank only if the PLC has no password.")
+        self.ip_var = StringVar(value=str(config["plc"]["ip"]))
+        self.opc_port_var = StringVar(value=str(self.opc_ua_port))
+        self.password_var = StringVar(value=self.default_password)
+        self.status_var = StringVar(value="")
 
         self.password_visible = False
         self.is_busy = False
@@ -70,7 +154,9 @@ class RebootApp:
 
         top = ttk.Frame(root, padding=16)
         top.grid(row=0, column=0, sticky="ew")
+        top.columnconfigure(0, weight=0)
         top.columnconfigure(1, weight=1)
+        top.columnconfigure(2, weight=0)
 
         ttk.Label(top, text="PLC IP").grid(row=0, column=0, sticky=W, padx=(0, 10), pady=(0, 8))
         ttk.Entry(top, textvariable=self.ip_var).grid(row=0, column=1, sticky="ew", pady=(0, 8))
@@ -85,14 +171,16 @@ class RebootApp:
 
         self.password_entry = ttk.Entry(password_row, textvariable=self.password_var, show="*")
         self.password_entry.grid(row=0, column=0, sticky="ew")
-        self.password_toggle_button = ttk.Button(password_row, text="👁", width=3, command=self.toggle_password_visibility)
+        self.password_toggle_button = ttk.Button(
+            password_row,
+            text="Show",
+            width=6,
+            command=self.toggle_password_visibility,
+        )
         self.password_toggle_button.grid(row=0, column=1, padx=(6, 0))
 
-        hint = "PLC HTTPS port is fixed at 8001. Blank password means: send an empty PLC password. This clean-room build does not use UniLogic's saved password store."
-        ttk.Label(top, text=hint, foreground="#555", wraplength=900).grid(row=3, column=0, columnspan=3, sticky="ew", pady=(0, 12))
-
         buttons = ttk.Frame(top)
-        buttons.grid(row=4, column=0, columnspan=3, sticky=W)
+        buttons.grid(row=3, column=0, columnspan=3, pady=(6, 0))
 
         self.check_button = ttk.Button(buttons, text="Check PLC", command=self.on_check)
         self.check_button.pack(side=LEFT)
@@ -109,24 +197,20 @@ class RebootApp:
         self.run_button = ttk.Button(buttons, text="RUN", command=self.toggle_run)
         self.run_button.pack(side=LEFT, padx=8)
 
-        ttk.Button(buttons, text="Clear Log", command=self.clear_log).pack(side=LEFT)
+        ttk.Button(buttons, text="Clear", command=self.clear_log).pack(side=LEFT)
 
-        ttk.Label(top, textvariable=self.status_var, anchor=W).grid(row=5, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        self.status_label = ttk.Label(top, textvariable=self.status_var, anchor=W)
+        self.status_label.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(8, 0))
 
-        log_frame = ttk.Frame(root, padding=(16, 12, 16, 16))
-        log_frame.grid(row=1, column=0, sticky="nsew")
-        log_frame.rowconfigure(0, weight=1)
-        log_frame.columnconfigure(0, weight=1)
+        activity_frame = ttk.Frame(root, padding=(16, 8, 16, 16))
+        activity_frame.grid(row=1, column=0, sticky="nsew")
+        activity_frame.rowconfigure(0, weight=1)
+        activity_frame.columnconfigure(0, weight=1)
 
-        self.log = ScrolledText(log_frame, wrap="word", font=("Consolas", 10))
-        self.log.grid(row=0, column=0, sticky="nsew")
-        self.log.insert(END, "Press Check PLC to verify basic HTTPS communication with the PLC.\n")
-        self.log.insert(END, "Press Validate to test the HTTPS login + WebSocket flow.\n")
-        self.log.insert(END, "Press Check OPC UA to verify OPC UA communication with the PLC.\n")
-        self.log.insert(END, "Press RUN to monitor OPC UA every 10 seconds and auto-reboot on failure.\n")
-        self.log.insert(END, "Press Reboot PLC when you're ready.\n")
-        self.log.configure(state="disabled")
+        self.activity_list = Listbox(activity_frame, height=6, font=("Consolas", 10))
+        self.activity_list.grid(row=0, column=0, sticky="nsew")
         self.refresh_controls()
+        self._set_status("")
 
     def _on_window_ready(self) -> None:
         try:
@@ -175,15 +259,15 @@ class RebootApp:
         if self.is_tray_visible:
             return
 
-        if ICON_PATH.exists() and self.tray_image is None:
-            self.tray_image = Image.open(ICON_PATH)
+        if self.icon_path.exists() and self.tray_image is None:
+            self.tray_image = Image.open(self.icon_path)
 
         menu = pystray.Menu(
             pystray.MenuItem("Show", self._tray_show_window),
             pystray.MenuItem("Stop RUN", self._tray_stop_run),
             pystray.MenuItem("Exit", self._tray_exit),
         )
-        icon = pystray.Icon("UnistreamPLCReboot", self.tray_image, "Unistream PLC Reboot", menu)
+        icon = pystray.Icon("UnistreamPLCReboot", self.tray_image, self.app_title, menu)
         self.tray_icon = icon
 
         thread = threading.Thread(target=icon.run, daemon=True)
@@ -213,15 +297,22 @@ class RebootApp:
         self.root.after(0, self.on_close)
 
     def append_log(self, text: str) -> None:
-        self.log.configure(state="normal")
-        self.log.insert(END, text.rstrip() + "\n")
-        self.log.see(END)
-        self.log.configure(state="disabled")
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            self.add_event(line)
 
     def clear_log(self) -> None:
-        self.log.configure(state="normal")
-        self.log.delete("1.0", END)
-        self.log.configure(state="disabled")
+        self.activity_list.delete(0, END)
+        self._set_status("")
+
+    def add_event(self, message: str) -> None:
+        timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+        entry = f"{timestamp}  {message}"
+        self.activity_list.insert(0, entry)
+        if self.activity_list.size() > 8:
+            self.activity_list.delete(8, END)
 
     def append_log_threadsafe(self, text: str) -> None:
         if self._closing:
@@ -235,14 +326,21 @@ class RebootApp:
         if self._closing:
             return
         try:
-            self.root.after(0, lambda: self.status_var.set(text))
+            self.root.after(0, lambda: self._set_status(text))
         except Exception:
             pass
 
     def set_busy(self, busy: bool, status: str) -> None:
         self.is_busy = busy
         self.refresh_controls()
-        self.status_var.set(status)
+        self._set_status(status)
+
+    def _set_status(self, text: str) -> None:
+        self.status_var.set(text)
+        if text:
+            self.status_label.grid()
+        else:
+            self.status_label.grid_remove()
 
     def refresh_controls(self) -> None:
         manual_state = "normal"
@@ -263,6 +361,7 @@ class RebootApp:
     def toggle_password_visibility(self) -> None:
         self.password_visible = not self.password_visible
         self.password_entry.configure(show="" if self.password_visible else "*")
+        self.password_toggle_button.configure(text="Hide" if self.password_visible else "Show")
 
     def get_inputs(self) -> tuple[str, int, int, str | None]:
         ip = self.ip_var.get().strip()
@@ -278,7 +377,7 @@ class RebootApp:
             raise PLCError("OPC UA port must be between 1 and 65535.")
 
         password = self.password_var.get().strip()
-        return ip, DEFAULT_PLC_PORT, opc_port, password or None
+        return ip, self.plc_port, opc_port, password or None
 
     def check_blocking_session(self, ip: str, port: int) -> str | None:
         command = rf"""
@@ -333,7 +432,7 @@ $items | ConvertTo-Json -Compress
         if check_session:
             blocking_session = self.check_blocking_session(ip, plc_port)
             if blocking_session:
-                self.append_log(f"\n[{title}] blocked: active PLC session detected: {blocking_session}")
+                self.add_event(f"{title} blocked: {blocking_session}")
                 messagebox.showwarning(
                     "Session In Use",
                     "Another process is already connected to this PLC.\n\n"
@@ -344,8 +443,8 @@ $items | ConvertTo-Json -Compress
                 return
 
         password_mode = "provided" if password else "empty"
-        self.append_log(f"\n[{title}] ip={ip} plc_port={plc_port} opc_ua_port={opc_port} password={password_mode}")
         self.set_busy(True, f"{title}...")
+        self.add_event(f"{title} started ({ip}, password={password_mode})")
 
         def worker() -> None:
             try:
@@ -368,16 +467,18 @@ $items | ConvertTo-Json -Compress
         threading.Thread(target=worker, daemon=True).start()
 
     def _finish_action(self, title: str, returncode: int, stdout: str, stderr: str) -> None:
-        next_status = "RUN monitoring OPC UA every 10 seconds." if self.run_enabled else "Ready."
+        next_status = (
+            f"RUN monitoring OPC UA every {self.run_check_interval_seconds} seconds."
+            if self.run_enabled
+            else ""
+        )
         self.set_busy(False, next_status)
 
-        if stdout:
-            self.append_log(stdout)
         if stderr:
-            self.append_log(f"[stderr]\n{stderr}")
+            self.add_event(f"{title} error: {stderr.splitlines()[0]}")
 
         if returncode == 0:
-            self.append_log(f"[{title}] success")
+            self.add_event(f"{title} success")
             if title == "Check PLC":
                 messagebox.showinfo("Check PLC", "PLC communication looks normal.", parent=self.root)
             elif title == "Check OPC UA":
@@ -386,8 +487,24 @@ $items | ConvertTo-Json -Compress
                 messagebox.showinfo("Reboot Sent", "Reboot command sent successfully.", parent=self.root)
             return
 
-        self.append_log(f"[{title}] failed with exit code {returncode}")
+        failure_detail = self._summarize_output(stdout) or f"exit code {returncode}"
+        self.add_event(f"{title} failed: {failure_detail}")
         messagebox.showerror(title, f"{title} failed.\nSee log for details.", parent=self.root)
+
+    def _summarize_output(self, output: str) -> str:
+        for line in output.splitlines():
+            clean = line.strip()
+            if not clean:
+                continue
+            if clean.startswith("Attempting "):
+                continue
+            if clean in {"OPC UA communication OK", "PLC communication OK", "Validated"}:
+                return clean
+            if "failed" in clean.lower() or "unauthorized" in clean.lower():
+                return clean
+            if clean.startswith("reboot="):
+                return clean
+        return ""
 
     def on_check(self) -> None:
         self.run_async("Check PLC", check_plc, check_session=False)
@@ -426,10 +543,8 @@ $items | ConvertTo-Json -Compress
 
         ip, plc_port, opc_port, password = self.run_config
         password_mode = "provided" if password else "empty"
-        self.append_log(
-            f"\n[RUN] started ip={ip} plc_port={plc_port} opc_ua_port={opc_port} password={password_mode}"
-        )
-        self.status_var.set("RUN monitoring OPC UA every 10 seconds.")
+        self.add_event(f"RUN started ({ip}, password={password_mode})")
+        self._set_status(f"RUN monitoring OPC UA every {self.run_check_interval_seconds} seconds.")
 
         self.run_thread = threading.Thread(target=self._run_monitor_loop, daemon=True)
         self.run_thread.start()
@@ -447,8 +562,8 @@ $items | ConvertTo-Json -Compress
         self.run_thread = None
 
         if notify:
-            self.append_log("[RUN] stopped")
-            self.status_var.set("Ready.")
+            self.add_event("RUN stopped")
+            self._set_status("")
 
     def _run_monitor_loop(self) -> None:
         if not self.run_config:
@@ -465,33 +580,32 @@ $items | ConvertTo-Json -Compress
                 continue
 
             opc_result = check_opcua(ip, opc_port)
-            if opc_result.stdout:
-                self.append_log_threadsafe(opc_result.stdout.strip())
-
             if opc_result.returncode == 0:
-                self.append_log_threadsafe("[RUN] OPCUA_CHECK_OK")
-                self.set_status_threadsafe("RUN monitoring OPC UA every 10 seconds.")
-                self.run_stop_event.wait(RUN_CHECK_INTERVAL_SECONDS)
+                self.set_status_threadsafe(
+                    f"RUN monitoring OPC UA every {self.run_check_interval_seconds} seconds."
+                )
+                self.run_stop_event.wait(self.run_check_interval_seconds)
                 continue
 
-            self.append_log_threadsafe("[RUN] OPCUA_CHECK_FAIL")
-            self.append_log_threadsafe("[RUN] AUTO_REBOOT_START")
+            reboot_time = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+            self.append_log_threadsafe(f"AUTO REBOOT at {reboot_time}")
 
             reboot_result = reboot_plc(ip, plc_port, password)
-            if reboot_result.stdout:
-                self.append_log_threadsafe(reboot_result.stdout.strip())
             if reboot_result.stderr:
-                self.append_log_threadsafe(f"[stderr]\n{reboot_result.stderr.strip()}")
+                self.append_log_threadsafe(f"Reboot error: {reboot_result.stderr.strip()}")
 
             if reboot_result.returncode == 0:
-                self.append_log_threadsafe("[RUN] AUTO_REBOOT_DONE")
+                self.append_log_threadsafe(f"Reboot sent at {reboot_time}")
             else:
-                self.append_log_threadsafe(f"[RUN] AUTO_REBOOT_FAILED returncode={reboot_result.returncode}")
+                detail = self._summarize_output(reboot_result.stdout) or f"exit code {reboot_result.returncode}"
+                self.append_log_threadsafe(f"Auto reboot failed: {detail}")
 
-            self.cooldown_until = time.time() + RUN_COOLDOWN_SECONDS
-            self.set_status_threadsafe("RUN cooldown: 300s remaining before next OPC UA check.")
+            self.cooldown_until = time.time() + self.run_cooldown_seconds
+            self.set_status_threadsafe(
+                f"RUN cooldown: {self.run_cooldown_seconds}s remaining before next OPC UA check."
+            )
 
-        self.set_status_threadsafe("Ready.")
+        self.set_status_threadsafe("")
 
     def run(self) -> None:
         self.root.mainloop()
@@ -515,7 +629,7 @@ def run_cli(args: argparse.Namespace) -> int:
     return result.returncode
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(config: dict[str, Any]) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Unistream PLC reboot helper")
     parser.add_argument(
         "-run",
@@ -533,15 +647,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     for name in ("check", "validate", "reboot"):
         cmd = sub.add_parser(name)
-        cmd.add_argument("--ip", default=DEFAULT_PLC_IP)
-        cmd.add_argument("--port", type=int, default=DEFAULT_PLC_PORT)
-        cmd.add_argument("--password", default="")
+        cmd.add_argument("--ip", default=str(config["plc"]["ip"]))
+        cmd.add_argument("--port", type=int, default=int(config["plc"]["api_port"]))
+        cmd.add_argument("--password", default=str(config["plc"]["password"]))
 
     opc_cmd = sub.add_parser("check-opcua")
-    opc_cmd.add_argument("--ip", default=DEFAULT_PLC_IP)
-    opc_cmd.add_argument("--opc-port", type=int, default=DEFAULT_OPCUA_PORT)
+    opc_cmd.add_argument("--ip", default=str(config["plc"]["ip"]))
+    opc_cmd.add_argument("--opc-port", type=int, default=int(config["plc"]["opc_ua_port"]))
 
     return parser
+
+
+def build_namespace_from_config(config: dict[str, Any]) -> argparse.Namespace:
+    startup = config["startup"]
+    plc = config["plc"]
+    command = str(startup["command"])
+
+    return argparse.Namespace(
+        command=command if command != "gui" else None,
+        run=bool(startup["auto_run_monitor"]),
+        tray=bool(startup["start_in_tray"]),
+        ip=str(plc["ip"]),
+        port=int(plc["api_port"]),
+        opc_port=int(plc["opc_ua_port"]),
+        password=str(plc["password"]),
+    )
 
 
 def set_windows_app_id(app_id: str) -> None:
@@ -562,21 +692,22 @@ def apply_window_icon(root: Tk, icon_path: Path) -> None:
         pass
 
 
-def get_resource_path(name: str) -> Path:
-    base_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-    return base_dir / name
-
-
 def main() -> int:
-    global ICON_PATH
-    ICON_PATH = get_resource_path("lioil.ico")
-    parser = build_parser()
+    base_dir = get_app_base_dir()
+    config, config_path = load_config(base_dir)
+    parser = build_parser(config)
     args = parser.parse_args()
+
+    # If no CLI arguments are provided, config.json fully drives startup behavior.
+    if len(sys.argv) == 1:
+        args = build_namespace_from_config(config)
 
     if args.command:
         return run_cli(args)
 
-    app = RebootApp(auto_run=args.run, start_in_tray=args.tray)
+    app = RebootApp(config, auto_run=args.run, start_in_tray=args.tray)
+    if len(sys.argv) == 1:
+        print(f"Loaded startup settings from {config_path}")
     app.run()
     return 0
 

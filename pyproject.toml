@@ -1,13 +1,15 @@
-[build-system]
-requires = ["setuptools>=77", "wheel"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "unistreamplc-reboot"
 version = "0.1.0"
 description = "Clean-room HTTPS and WebSocket reboot helper for Unitronics UniStream PLC"
 readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+keywords = ["unistream", "plc", "reboot"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+]
 dependencies = [
     "asyncua>=1.1.5",
     "cryptography>=46.0.0",
@@ -15,12 +17,11 @@ dependencies = [
     "pystray>=0.19.5",
     "websockets>=13.0",
 ]
-authors = [{ name = "Your Name", email = "you@example.com" }]
-license = "MIT"
-keywords = ["unistream", "plc", "reboot"]
-classifiers = [
-    "Programming Language :: Python :: 3",
+
+[dependency-groups]
+build = [
+    "pyinstaller>=6.16.0",
 ]
 
-[tool.setuptools]
-py-modules = ["main", "unistream_client"]
+[tool.uv]
+package = false
